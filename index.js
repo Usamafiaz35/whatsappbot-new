@@ -148,7 +148,7 @@ async function connectToWhatsApp() {
 async function handleWebhook(sock, sender, text) {
   try {
     const { data } = await axios.post(N8N_WEBHOOK_URL, { sender, message: text },
-      { timeout: 15000, headers: { "Content-Type": "application/json" } });
+      { timeout: 0, headers: { "Content-Type": "application/json" } });
     const reply = typeof data === "string" ? data : data?.reply || data?.message || data?.text || null;
     if (reply) { await sock.sendMessage(sender, { text: reply }); console.log(`📤 Replied to [${sender}]`); }
   } catch(err) { console.error(`❌ Webhook error: ${err?.response?.status || err?.message}`); }
