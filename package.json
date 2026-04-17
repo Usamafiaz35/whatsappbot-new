@@ -1,18 +1,13 @@
 {
   "name": "whatsapp-n8n-bot",
   "version": "1.0.0",
-  "description": "Minimal WhatsApp bot — Baileys + n8n webhook",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18.0.0" },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",
     "axios": "^1.7.9",
     "pino": "^9.6.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode": "^1.5.4"
   }
 }
