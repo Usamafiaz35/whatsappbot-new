@@ -10,6 +10,7 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidBroadcast,
+  downloadMediaMessage,
 } = require("@whiskeysockets/baileys");
 
 const axios  = require("axios");
@@ -133,22 +134,57 @@ async function connectToWhatsApp() {
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
+
     for (const msg of messages) {
       if (msg.key.fromMe || isJidBroadcast(msg.key.remoteJid) || msg.key.remoteJid === "status@broadcast") continue;
+
       const sender = msg.key.remoteJid;
-      const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text ||
-                   msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || null;
-      if (!sender || !text) continue;
-      console.log(`📩 [${sender}]: ${text}`);
-      await handleWebhook(sock, sender, text);
+      const text =
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        msg.message?.videoMessage?.caption ||
+        null;
+
+      const isVoice = !!msg.message?.audioMessage;
+
+      // dono null hain toh skip
+      if (!sender || (!text && !isVoice)) continue;
+
+      if (isVoice) {
+        console.log(`🎤 Voice note [${sender}]`);
+
+        const buffer       = await downloadMediaMessage(msg, "buffer", {});
+        const base64Audio  = buffer.toString("base64");
+        const mimetype     = msg.message.audioMessage.mimetype || "audio/ogg; codecs=opus";
+
+        await handleWebhook(sock, sender, null, {
+          type: "voice_note",
+          audio: base64Audio,
+          mimetype: mimetype,
+        });
+      } else {
+        console.log(`📩 [${sender}]: ${text}`);
+        await handleWebhook(sock, sender, text, { type: "text" });
+      }
     }
   });
 }
 
-async function handleWebhook(sock, sender, text) {
+async function handleWebhook(sock, sender, text, extra = {}) {
   try {
-    const { data } = await axios.post(N8N_WEBHOOK_URL, { sender, message: text },
-      { timeout: 0, headers: { "Content-Type": "application/json" } });
+    const payload = {
+      sender,
+      message: text || "",
+      ...extra,   // type, audio, mimetype
+    };
+
+    const { data } = await axios.post(
+      N8N_WEBHOOK_URL,
+      payload,
+      { timeout: 0, headers: { "Content-Type": "application/json" } }
+    );
+
     const reply = typeof data === "string" ? data : data?.reply || data?.message || data?.text || null;
     if (reply) { await sock.sendMessage(sender, { text: reply }); console.log(`📤 Replied to [${sender}]`); }
   } catch(err) { console.error(`❌ Webhook error: ${err?.response?.status || err?.message}`); }
