@@ -197,7 +197,7 @@ async function handleWebhook(sock, sender, text, extra = {}) {
       const audioBuffer = Buffer.from(response.data);
       await sock.sendMessage(sender, {
         audio: audioBuffer,
-        mimetype: "audio/mp4",
+        mimetype: "audio/mpeg",
         ptt: true,   // true = voice note ki tarah dikhega
       });
       console.log(`🔊 Audio sent to [${sender}]`);
