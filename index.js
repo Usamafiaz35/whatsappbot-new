@@ -1,7 +1,6 @@
 /**
  * WhatsApp Bot — Baileys + n8n Webhook
  * QR code browser mein dikhta hai (Render ke liye)
- * Text + Voice Note (binary) support
  */
 
 const {
@@ -11,15 +10,13 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidBroadcast,
-  downloadMediaMessage,
 } = require("@whiskeysockets/baileys");
 
-const axios     = require("axios");
-const qrcode    = require("qrcode");
-const pino      = require("pino");
-const http      = require("http");
-const path      = require("path");
-const FormData  = require("form-data");
+const axios  = require("axios");
+const qrcode = require("qrcode");
+const pino   = require("pino");
+const http   = require("http");
+const path   = require("path");
 
 const N8N_WEBHOOK_URL = "https://n8n-jyfj.onrender.com/webhook/whatsapp";
 const SESSION_DIR     = path.join(__dirname, "auth_info");
@@ -136,80 +133,24 @@ async function connectToWhatsApp() {
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
-
     for (const msg of messages) {
-      if (
-        msg.key.fromMe ||
-        isJidBroadcast(msg.key.remoteJid) ||
-        msg.key.remoteJid === "status@broadcast"
-      ) continue;
-
+      if (msg.key.fromMe || isJidBroadcast(msg.key.remoteJid) || msg.key.remoteJid === "status@broadcast") continue;
       const sender = msg.key.remoteJid;
-
-      // ── Text message ──────────────────────────────────────────────────────
-      const text =
-        msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.imageMessage?.caption ||
-        msg.message?.videoMessage?.caption ||
-        null;
-
-      // ── Voice note check ──────────────────────────────────────────────────
-      const isVoice = !!msg.message?.audioMessage;
-
-      // dono null hain toh skip
-      if (!sender || (!text && !isVoice)) continue;
-
-      if (isVoice) {
-        // ── Voice Note → Binary FormData ────────────────────────────────────
-        console.log(`🎤 Voice note received [${sender}]`);
-        try {
-          const buffer   = await downloadMediaMessage(msg, "buffer", {});
-          const mimetype = msg.message.audioMessage.mimetype || "audio/ogg; codecs=opus";
-          const ext      = mimetype.includes("mp4") ? "mp4" : "ogg";
-
-          const form = new FormData();
-          form.append("sender", sender);
-          form.append("type", "voice_note");
-          form.append("audio", buffer, {
-            filename    : `voice.${ext}`,
-            contentType : mimetype,
-          });
-
-          await axios.post(N8N_WEBHOOK_URL, form, {
-            timeout : 0,
-            headers : form.getHeaders(),
-          });
-
-          console.log(`📤 Voice note sent to n8n [${sender}]`);
-        } catch(e) {
-          console.error(`❌ Voice error: ${e.message}`);
-        }
-
-      } else {
-        // ── Text Message ─────────────────────────────────────────────────────
-        console.log(`📩 [${sender}]: ${text}`);
-        await handleWebhook(sock, sender, text, { type: "text" });
-      }
+      const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text ||
+                   msg.message?.imageMessage?.caption || msg.message?.videoMessage?.caption || null;
+      if (!sender || !text) continue;
+      console.log(`📩 [${sender}]: ${text}`);
+      await handleWebhook(sock, sender, text);
     }
   });
 }
 
-// ─── Text Webhook Handler ─────────────────────────────────────────────────
-async function handleWebhook(sock, sender, text, extra = {}) {
+async function handleWebhook(sock, sender, text) {
   try {
-    const payload = {
-      sender,
-      message: text || "",
-      ...extra,
-    };
-
-    const { data } = await axios.post(N8N_WEBHOOK_URL, payload,
+    const { data } = await axios.post(N8N_WEBHOOK_URL, { sender, message: text },
       { timeout: 0, headers: { "Content-Type": "application/json" } });
-
     const reply = typeof data === "string" ? data : data?.reply || data?.message || data?.text || null;
     if (reply) { await sock.sendMessage(sender, { text: reply }); console.log(`📤 Replied to [${sender}]`); }
-
   } catch(err) { console.error(`❌ Webhook error: ${err?.response?.status || err?.message}`); }
 }
 
