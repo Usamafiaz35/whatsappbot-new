@@ -1,7 +1,7 @@
 /**
  * WhatsApp Bot — Baileys + n8n Webhook
  * QR code browser mein dikhta hai (Render ke liye)
- * Text + Voice Note support
+ * Text + Voice Note (binary) support
  */
 
 const {
@@ -14,11 +14,12 @@ const {
   downloadMediaMessage,
 } = require("@whiskeysockets/baileys");
 
-const axios  = require("axios");
-const qrcode = require("qrcode");
-const pino   = require("pino");
-const http   = require("http");
-const path   = require("path");
+const axios     = require("axios");
+const qrcode    = require("qrcode");
+const pino      = require("pino");
+const http      = require("http");
+const path      = require("path");
+const FormData  = require("form-data");
 
 const N8N_WEBHOOK_URL = "https://n8n-jyfj.onrender.com/webhook/whatsapp";
 const SESSION_DIR     = path.join(__dirname, "auth_info");
@@ -160,22 +161,33 @@ async function connectToWhatsApp() {
       if (!sender || (!text && !isVoice)) continue;
 
       if (isVoice) {
+        // ── Voice Note → Binary FormData ────────────────────────────────────
         console.log(`🎤 Voice note received [${sender}]`);
         try {
-          const buffer     = await downloadMediaMessage(msg, "buffer", {});
-          const base64Audio = buffer.toString("base64");
-          const mimetype   = msg.message.audioMessage.mimetype || "audio/ogg; codecs=opus";
+          const buffer   = await downloadMediaMessage(msg, "buffer", {});
+          const mimetype = msg.message.audioMessage.mimetype || "audio/ogg; codecs=opus";
+          const ext      = mimetype.includes("mp4") ? "mp4" : "ogg";
 
-          await handleWebhook(sock, sender, null, {
-            type    : "voice_note",
-            audio   : base64Audio,
-            mimetype: mimetype,
+          const form = new FormData();
+          form.append("sender", sender);
+          form.append("type", "voice_note");
+          form.append("audio", buffer, {
+            filename    : `voice.${ext}`,
+            contentType : mimetype,
           });
+
+          await axios.post(N8N_WEBHOOK_URL, form, {
+            timeout : 0,
+            headers : form.getHeaders(),
+          });
+
+          console.log(`📤 Voice note sent to n8n [${sender}]`);
         } catch(e) {
-          console.error(`❌ Voice download error: ${e.message}`);
+          console.error(`❌ Voice error: ${e.message}`);
         }
 
       } else {
+        // ── Text Message ─────────────────────────────────────────────────────
         console.log(`📩 [${sender}]: ${text}`);
         await handleWebhook(sock, sender, text, { type: "text" });
       }
@@ -183,13 +195,13 @@ async function connectToWhatsApp() {
   });
 }
 
-// ─── Webhook Handler ──────────────────────────────────────────────────────
+// ─── Text Webhook Handler ─────────────────────────────────────────────────
 async function handleWebhook(sock, sender, text, extra = {}) {
   try {
     const payload = {
       sender,
       message: text || "",
-      ...extra,   // type, audio, mimetype
+      ...extra,
     };
 
     const { data } = await axios.post(N8N_WEBHOOK_URL, payload,
