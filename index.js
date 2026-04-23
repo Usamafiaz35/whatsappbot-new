@@ -171,6 +171,7 @@ async function connectToWhatsApp() {
   });
 }
 
+// ─── Webhook Handler ───────────────────────────────────────────────────────
 async function handleWebhook(sock, sender, text, extra = {}) {
   try {
     const payload = {
@@ -179,15 +180,49 @@ async function handleWebhook(sock, sender, text, extra = {}) {
       ...extra,   // type, audio, mimetype
     };
 
-    const { data } = await axios.post(
+    const response = await axios.post(
       N8N_WEBHOOK_URL,
       payload,
-      { timeout: 0, headers: { "Content-Type": "application/json" } }
+      {
+        timeout: 0,
+        headers: { "Content-Type": "application/json" },
+        responseType: "arraybuffer",  // Binary data receive karo (audio ya text dono ke liye)
+      }
     );
 
-    const reply = typeof data === "string" ? data : data?.reply || data?.message || data?.text || null;
-    if (reply) { await sock.sendMessage(sender, { text: reply }); console.log(`📤 Replied to [${sender}]`); }
-  } catch(err) { console.error(`❌ Webhook error: ${err?.response?.status || err?.message}`); }
+    const contentType = response.headers["content-type"] || "";
+
+    if (contentType.includes("audio")) {
+      // ── Audio response mila — WhatsApp pe voice note bhejo ──
+      const audioBuffer = Buffer.from(response.data);
+      await sock.sendMessage(sender, {
+        audio: audioBuffer,
+        mimetype: "audio/mp4",
+        ptt: true,   // true = voice note ki tarah dikhega
+      });
+      console.log(`🔊 Audio sent to [${sender}]`);
+
+    } else {
+      // ── Text response handle karo ──
+      const rawText = Buffer.from(response.data).toString("utf-8");
+
+      const parsed = (() => {
+        try { return JSON.parse(rawText); } catch { return null; }
+      })();
+
+      const reply = parsed
+        ? parsed?.reply || parsed?.message || parsed?.text || null
+        : rawText || null;
+
+      if (reply) {
+        await sock.sendMessage(sender, { text: reply });
+        console.log(`📤 Text replied to [${sender}]`);
+      }
+    }
+
+  } catch(err) {
+    console.error(`❌ Webhook error: ${err?.response?.status || err?.message}`);
+  }
 }
 
 connectToWhatsApp().catch(err => { console.error("Fatal:", err); process.exit(1); });
