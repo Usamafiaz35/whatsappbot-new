@@ -193,12 +193,16 @@ async function handleWebhook(sock, sender, text, extra = {}) {
     const contentType = response.headers["content-type"] || "";
 
     if (contentType.includes("audio")) {
-      // ── Audio response mila — WhatsApp pe voice note bhejo ──
       const audioBuffer = Buffer.from(response.data);
+
+      // MP3/MPEG → regular audio (mobile + desktop dono pe kaam karta hai)
+      // PTT (voice note) sirf ogg/opus support karta hai mobile pe
+      const isOgg = contentType.includes("ogg");
+
       await sock.sendMessage(sender, {
         audio: audioBuffer,
-        mimetype: "audio/mpeg",
-        ptt: true,   // true = voice note ki tarah dikhega
+        mimetype: isOgg ? "audio/ogg; codecs=opus" : "audio/mpeg",
+        ptt: isOgg,  // sirf ogg hone pe PTT enable karo
       });
       console.log(`🔊 Audio sent to [${sender}]`);
 
