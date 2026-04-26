@@ -20,7 +20,7 @@ const http   = require("http");
 const fs     = require("fs");
 const path   = require("path");
 
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || "https://n8n-jyfj.onrender.com/webhook/helotest";
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || "https://n8n-jyfj.onrender.com/webhook/whatsapp";
 const SESSION_DIR     = path.join(__dirname, "auth_info");
 const MEDIA_DIR       = path.join(__dirname, "media");
 const LID_MAP_PATH    = path.join(SESSION_DIR, "lid-map.json");
