@@ -23,6 +23,7 @@ const path   = require("path");
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || "https://n8n-jyfj.onrender.com/webhook-test/helotest";
 const SESSION_DIR     = path.join(__dirname, "auth_info");
 const MEDIA_DIR       = path.join(__dirname, "media");
+const LID_MAP_PATH    = path.join(SESSION_DIR, "lid-map.json");
 const PORT            = process.env.PORT || 3000;
 const HOST            = process.env.HOST || "0.0.0.0";
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || null;
@@ -36,6 +37,8 @@ let isConnected = false;
 let waSocket    = null;
 let reconnectTimer = null;
 let isReconnecting = false;
+const lidToPhoneMap = new Map();
+let lidMapLoaded = false;
 
 // ─── HTTP Server ───────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
@@ -189,6 +192,144 @@ function sanitizeFileName(name) {
     .slice(0, 120);
 }
 
+function isLidJid(jid = "") {
+  return typeof jid === "string" && jid.endsWith("@lid");
+}
+
+function isPhoneJid(jid = "") {
+  return typeof jid === "string" && jid.endsWith("@s.whatsapp.net");
+}
+
+function normalizeToPhoneJid(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (isPhoneJid(raw)) return raw;
+  const digits = raw.replace(/\D/g, "");
+  return digits ? `${digits}@s.whatsapp.net` : null;
+}
+
+function normalizeSenderName(name) {
+  const trimmed = String(name || "").trim();
+  return trimmed || null;
+}
+
+function getContextInfoFromMessage(content = {}) {
+  const firstNode = content && typeof content === "object" ? Object.values(content)[0] : null;
+  return (
+    firstNode?.contextInfo ||
+    content?.extendedTextMessage?.contextInfo ||
+    content?.imageMessage?.contextInfo ||
+    content?.videoMessage?.contextInfo ||
+    null
+  );
+}
+
+async function loadLidMapFromDisk() {
+  if (lidMapLoaded) return;
+  lidMapLoaded = true;
+  try {
+    const raw = await fs.promises.readFile(LID_MAP_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      for (const [lidJid, phoneJid] of Object.entries(parsed)) {
+        if (isLidJid(lidJid) && isPhoneJid(phoneJid)) {
+          lidToPhoneMap.set(lidJid, phoneJid);
+        }
+      }
+      if (lidToPhoneMap.size) {
+        console.log(`🗂️ Loaded ${lidToPhoneMap.size} LID mappings from disk.`);
+      }
+    }
+  } catch {
+    // no persisted mapping yet
+  }
+}
+
+async function persistLidMapToDisk() {
+  try {
+    await fs.promises.mkdir(SESSION_DIR, { recursive: true });
+    const payload = Object.fromEntries(lidToPhoneMap.entries());
+    await fs.promises.writeFile(LID_MAP_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (err) {
+    console.error(`⚠️ Failed to persist LID map: ${err.message}`);
+  }
+}
+
+function rememberLidPhoneMapping(lidCandidate, phoneCandidate) {
+  const lid = isLidJid(lidCandidate) ? lidCandidate : null;
+  const phone = normalizeToPhoneJid(phoneCandidate);
+  if (!lid || !phone) return false;
+  if (lidToPhoneMap.get(lid) === phone) return false;
+  lidToPhoneMap.set(lid, phone);
+  return true;
+}
+
+async function resolveSenderJids(sock, msg, content) {
+  const contextInfo = getContextInfoFromMessage(content);
+  const remoteJid = msg?.key?.remoteJid || null;
+  const candidates = [
+    msg?.key?.senderPn,
+    msg?.senderPn,
+    msg?.key?.participantPn,
+    msg?.key?.participantAlt,
+    msg?.key?.remoteJidAlt,
+    msg?.key?.participant,
+    msg?.participant,
+    contextInfo?.participantPn,
+    contextInfo?.participant,
+    msg?.key?.remoteJid,
+  ].filter(Boolean);
+
+  const directPhoneCandidate = candidates.find(item => normalizeToPhoneJid(item));
+  if (directPhoneCandidate && isLidJid(remoteJid)) {
+    const changed = rememberLidPhoneMapping(remoteJid, directPhoneCandidate);
+    if (changed) await persistLidMapToDisk();
+  }
+
+  const preferredPhoneJid = normalizeToPhoneJid(directPhoneCandidate);
+  if (preferredPhoneJid) {
+    return {
+      senderForWebhook: preferredPhoneJid,
+      replyToJid: remoteJid || preferredPhoneJid,
+    };
+  }
+
+  if (isLidJid(remoteJid) && lidToPhoneMap.has(remoteJid)) {
+    return {
+      senderForWebhook: lidToPhoneMap.get(remoteJid),
+      replyToJid: remoteJid,
+    };
+  }
+
+  if (isLidJid(remoteJid)) {
+    try {
+      const resolver = sock?.signalRepository?.lidMapping?.getPNForLID;
+      if (typeof resolver === "function") {
+        const resolvedFromStore = await resolver.call(sock.signalRepository.lidMapping, remoteJid);
+        const resolvedPhone = normalizeToPhoneJid(resolvedFromStore);
+        if (resolvedPhone) {
+          const changed = rememberLidPhoneMapping(remoteJid, resolvedPhone);
+          if (changed) await persistLidMapToDisk();
+          return {
+            senderForWebhook: resolvedPhone,
+            replyToJid: remoteJid,
+          };
+        }
+      }
+    } catch {
+      // ignore store resolution errors and use fallback below
+    }
+  }
+
+  const uniqueCandidates = [...new Set(candidates)];
+  const fallbackJid = uniqueCandidates.find(Boolean) || null;
+
+  return {
+    senderForWebhook: fallbackJid,
+    replyToJid: remoteJid || fallbackJid,
+  };
+}
+
 async function persistMediaBuffer(sender, mediaType, mediaNode, buffer) {
   await fs.promises.mkdir(MEDIA_DIR, { recursive: true });
 
@@ -225,6 +366,7 @@ async function connectToWhatsApp() {
 
   waSocket = sock;
   isReconnecting = false;
+  await loadLidMapFromDisk();
 
   sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -258,20 +400,45 @@ async function connectToWhatsApp() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  sock.ev.on("lid-mapping.update", async (updates = []) => {
+    let hasChanges = false;
+    for (const entry of updates) {
+      const lid = entry?.lid || entry?.lidJid || entry?.lid_jid || entry?.id;
+      const phone = entry?.pn || entry?.phone || entry?.jid || entry?.pnJid;
+      if (rememberLidPhoneMapping(lid, phone)) {
+        hasChanges = true;
+      }
+    }
+    if (hasChanges) {
+      await persistLidMapToDisk();
+      console.log(`🔁 LID mapping cache updated (${lidToPhoneMap.size} total).`);
+    }
+  });
+
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
     for (const msg of messages) {
       if (msg.key.fromMe || isJidBroadcast(msg.key.remoteJid) || msg.key.remoteJid === "status@broadcast") continue;
-
-      const sender = msg.key.remoteJid;
-      if (!sender || !msg.message) continue;
+      if (!msg.key.remoteJid || !msg.message) continue;
 
       const content = unwrapMessage(msg.message);
+      const { senderForWebhook, replyToJid } = await resolveSenderJids(sock, msg, content);
+      const sender = senderForWebhook;
+      if (!sender || !replyToJid) continue;
+
+      const senderName =
+        normalizeSenderName(msg.pushName) ||
+        normalizeSenderName(msg.verifiedBizName) ||
+        normalizeSenderName(msg.key.participant) ||
+        null;
+
       const text = getTextFromMessage(content);
       const mediaInfo = getMediaNode(content);
       const payload = {
         sender,
+        senderName,
+        replyToJid,
         messageId: msg.key.id || null,
         messageTimestamp: msg.messageTimestamp || null,
         messageType: mediaInfo?.mediaType || (text ? "text" : Object.keys(content)[0] || "unknown"),
@@ -323,6 +490,7 @@ async function handleWebhook(sock, incomingPayload) {
       : null;
     const urlsToTry = fallbackWebhookUrl ? [N8N_WEBHOOK_URL, fallbackWebhookUrl] : [N8N_WEBHOOK_URL];
     const sender = incomingPayload.sender;
+    const replyToJid = incomingPayload.replyToJid || sender;
     let response = null;
 
     for (const webhookUrl of urlsToTry) {
@@ -361,12 +529,12 @@ async function handleWebhook(sock, incomingPayload) {
 
       const isOgg = contentType.includes("ogg");
 
-      await sock.sendMessage(sender, {
+      await sock.sendMessage(replyToJid, {
         audio: audioBuffer,
         mimetype: isOgg ? "audio/ogg; codecs=opus" : "audio/mpeg",
         ptt: isOgg,  // sirf ogg hone pe PTT enable karo
       });
-      console.log(`🔊 Audio sent to [${sender}]`);
+      console.log(`🔊 Audio sent to [${replyToJid}]`);
 
     } else {
       const rawText = Buffer.from(response.data).toString("utf-8");
@@ -380,8 +548,8 @@ async function handleWebhook(sock, incomingPayload) {
         : rawText || null;
 
       if (reply) {
-        await sock.sendMessage(sender, { text: reply });
-        console.log(`📤 Text replied to [${sender}]`);
+        await sock.sendMessage(replyToJid, { text: reply });
+        console.log(`📤 Text replied to [${replyToJid}]`);
       }
     }
 
