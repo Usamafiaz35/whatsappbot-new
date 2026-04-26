@@ -1,104 +1,96 @@
 # WhatsApp Bot — Baileys + n8n
 
-Minimal, memory-efficient WhatsApp automation.
-Runs stably on **Render free tier**.
+Minimal WhatsApp bot for n8n automation, ready for Render free deployment.
 
----
+## What this does
 
-## 📁 Project Structure
+- Receives WhatsApp messages (text + media).
+- Sends data to your n8n webhook.
+- Sends n8n response back to WhatsApp.
+- Shows QR on browser URL (`/`) for linking WhatsApp.
 
-```
-whatsapp-bot/
-├── index.js          ← main bot (single file)
-├── package.json
-├── .gitignore
-└── auth_info/        ← auto-created on first run (session files)
-```
+## Render behavior in this project
 
----
+- Server binds to Render `PORT` automatically.
+- QR is shown on your running service URL (`https://your-app.onrender.com`).
+- Session is cleared on every restart (fresh login each time).
+  - Controlled by `RESET_SESSION_ON_START` (default is `true`).
 
-## ⚙️ Setup & Run
+## Required files
 
-### 1. Install dependencies
-```bash
-npm install
-```
+Already included:
 
-### 2. First run — scan QR
-```bash
-node index.js
-```
-- A QR code will appear in terminal.
-- Open WhatsApp → **Settings → Linked Devices → Link a Device**.
-- Scan the QR.
-- You'll see: `✅ WhatsApp Connected!`
+- `package.json` with `start` script (`node index.js`)
+- `.gitignore` for `node_modules/` and `auth_info/`
 
-### 3. Subsequent runs — no QR needed
-```bash
-node index.js
-# Session reloads from auth_info/ automatically
-```
+Recommended `.gitignore`:
 
----
-
-## 🚀 Deploy on Render
-
-1. Push this folder to a **GitHub repo**.
-2. Create a new **Web Service** on [render.com](https://render.com).
-3. Settings:
-   | Field | Value |
-   |-------|-------|
-   | Runtime | Node |
-   | Build Command | `npm install` |
-   | Start Command | `node index.js` |
-   | Instance Type | Free |
-
-4. **First deploy**: Go to Render logs, copy the QR, scan it.
-5. Session is saved — no QR on future redeploys.
-
-> ⚠️ **Important**: Add `auth_info/` to `.gitignore` so session files
-> are NOT committed to GitHub. Use Render's **Persistent Disk** (paid)
-> or a session-save strategy if you need true persistence across deploys.
-
----
-
-## 🔄 Flow
-
-```
-WhatsApp Message
-      ↓
-  index.js (Baileys)
-      ↓
-  POST → n8n Webhook
-      ↓
-  n8n processes & returns reply
-      ↓
-  Bot sends reply back to user
-```
-
----
-
-## 📦 n8n Webhook Payload
-
-**Bot sends to n8n:**
-```json
-{
-  "sender": "923001234567@s.whatsapp.net",
-  "message": "Hello!"
-}
-```
-
-**n8n should return:**
-```json
-{ "reply": "Your response text here" }
-```
-or plain text string.
-
----
-
-## 🛡️ .gitignore (recommended)
-
-```
+```gitignore
 node_modules/
 auth_info/
+media/
 ```
+
+## Local run
+
+```bash
+npm install
+node index.js
+```
+
+Open:
+
+- `http://localhost:3000` (or the port shown in terminal)
+
+## Step 1: Create GitHub repository
+
+1. Go to [https://github.com/new](https://github.com/new)
+2. Repository name: for example `whatsapp-n8n-bot`
+3. Keep it Public or Private (your choice)
+4. Click **Create repository**
+
+## Step 2: Push code to GitHub
+
+Run these commands inside your project folder:
+
+```bash
+git init
+git add .
+git commit -m "Initial WhatsApp Baileys bot"
+git branch -M main
+git remote add origin https://github.com/<your-username>/<your-repo>.git
+git push -u origin main
+```
+
+If repo is already initialized, skip `git init`.
+
+## Step 3: Deploy on Render
+
+1. Open [https://render.com](https://render.com)
+2. Click **New +** → **Web Service**
+3. Connect your GitHub repo
+4. Use these settings:
+   - Runtime: `Node`
+   - Build Command: `npm install`
+   - Start Command: `node index.js`
+   - Plan: `Free`
+5. Add environment variables:
+   - `N8N_WEBHOOK_URL` = your n8n webhook URL
+   - `PUBLIC_BASE_URL` = your Render URL (example: `https://your-app.onrender.com`)
+   - `RESET_SESSION_ON_START` = `true`
+6. Deploy
+
+## Step 4: Scan QR on Render URL
+
+After deploy:
+
+1. Open your Render URL in browser:
+   - `https://your-app.onrender.com`
+2. QR page will appear.
+3. WhatsApp → Linked Devices → Link a Device → scan QR.
+
+## Notes
+
+- If service restarts, session is removed by design, and new QR login is required.
+- For stable long-term session persistence, this behavior can be turned off by setting:
+  - `RESET_SESSION_ON_START=false`
