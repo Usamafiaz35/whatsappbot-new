@@ -499,7 +499,6 @@ async function handleWebhook(sock, incomingPayload) {
         webhookUrl,
         incomingPayload,
         {
-          timeout: 15000,
           headers: { "Content-Type": "application/json" },
           responseType: "arraybuffer",
           validateStatus: () => true,
