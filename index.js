@@ -22,13 +22,12 @@ const path   = require("path");
 
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || "https://n8n-jyfj.onrender.com/webhook/whatsapp";
 const SESSION_DIR     = path.join(__dirname, "auth_info");
-const MEDIA_DIR       = path.join(__dirname, "media");
 const LID_MAP_PATH    = path.join(SESSION_DIR, "lid-map.json");
 const PORT            = process.env.PORT || 3000;
 const HOST            = process.env.HOST || "0.0.0.0";
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || null;
 const RECONNECT_MS    = 5000;
-const RESET_SESSION_ON_START = process.env.RESET_SESSION_ON_START !== "false";
+const RESET_SESSION_ON_START = process.env.RESET_SESSION_ON_START === "true";
 
 const logger = pino({ level: "silent" });
 
@@ -330,20 +329,6 @@ async function resolveSenderJids(sock, msg, content) {
   };
 }
 
-async function persistMediaBuffer(sender, mediaType, mediaNode, buffer) {
-  await fs.promises.mkdir(MEDIA_DIR, { recursive: true });
-
-  const senderPart = (sender || "unknown").replace(/[^a-zA-Z0-9]/g, "_");
-  const providedName = mediaNode?.fileName ? sanitizeFileName(mediaNode.fileName) : null;
-  const extension = extFromMime(mediaNode?.mimetype);
-  const generatedName = `${Date.now()}_${senderPart}_${mediaType}.${extension}`;
-  const finalName = providedName || generatedName;
-  const fullPath = path.join(MEDIA_DIR, finalName);
-
-  await fs.promises.writeFile(fullPath, buffer);
-  return fullPath;
-}
-
 // ─── WhatsApp Connection ───────────────────────────────────────────────────
 async function connectToWhatsApp() {
   if (isReconnecting) return;
@@ -448,18 +433,16 @@ async function connectToWhatsApp() {
       if (mediaInfo) {
         try {
           const mediaBuffer = await downloadMediaMessage(msg, "buffer", {});
-          const savedPath = await persistMediaBuffer(sender, mediaInfo.mediaType, mediaInfo.mediaNode, mediaBuffer);
           const base64Data = mediaBuffer.toString("base64");
 
           payload.media = {
             type: mediaInfo.mediaType,
             mimetype: mediaInfo.mediaNode?.mimetype || null,
-            fileName: mediaInfo.mediaNode?.fileName || path.basename(savedPath),
+            fileName: mediaInfo.mediaNode?.fileName || null,
             caption: mediaInfo.mediaNode?.caption || null,
             seconds: mediaInfo.mediaNode?.seconds || null,
             ptt: !!mediaInfo.mediaNode?.ptt,
             fileLength: mediaInfo.mediaNode?.fileLength || mediaBuffer.length,
-            savedPath,
             base64: base64Data,
           };
 
