@@ -37,6 +37,7 @@ let waSocket    = null;
 let reconnectTimer = null;
 let isReconnecting = false;
 const lidToPhoneMap = new Map();
+const processedMessageIds = new Set();
 let lidMapLoaded = false;
 
 // ─── HTTP Server ───────────────────────────────────────────────────────────
@@ -406,6 +407,15 @@ async function connectToWhatsApp() {
     for (const msg of messages) {
       if (msg.key.fromMe || isJidBroadcast(msg.key.remoteJid) || msg.key.remoteJid === "status@broadcast") continue;
       if (!msg.key.remoteJid || !msg.message) continue;
+
+      if (processedMessageIds.has(msg.key.id)) continue;
+      processedMessageIds.add(msg.key.id);
+
+      // Keep Set size limited to avoid memory leak
+      if (processedMessageIds.size > 1000) {
+        const firstKey = processedMessageIds.values().next().value;
+        processedMessageIds.delete(firstKey);
+      }
 
       const content = unwrapMessage(msg.message);
       const { senderForWebhook, replyToJid } = await resolveSenderJids(sock, msg, content);
